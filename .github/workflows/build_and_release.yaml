@@ -24,6 +24,7 @@ jobs:
           xcodebuild \
             -scheme AgentMonitor \
             -configuration Release \
+            -destination 'platform=macOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             build
@@ -31,10 +32,11 @@ jobs:
       - name: Compress Release Artifact
         run: |
           APP_PATH="build/Build/Products/Release/AgentMonitor.app"
-          ZIP_NAME="AgentMonitor-${{ github.event.release.tag_name }}.zip"
+          ZIP_NAME="AgentMonitor-${{ github.event.release.tag_name }}-macOS.zip"
 
           if [ ! -d "$APP_PATH" ]; then
             echo "App not found at $APP_PATH"
+            echo "Available .app files:"
             find build/Build/Products -name "*.app"
             exit 1
           fi
@@ -44,6 +46,6 @@ jobs:
       - name: Upload Binary to Release Assets
         uses: softprops/action-gh-release@v2
         with:
-          files: AgentMonitor-${{ github.event.release.tag_name }}.zip
+          files: AgentMonitor-${{ github.event.release.tag_name }}-macOS.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
