@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PORT="${AGENT_MONITOR_PORT:-8765}"
+HOST="${AGENT_MONITOR_HOST:-127.0.0.1}"
+
+usage() {
+  cat <<'USAGE'
+agent-monitor: static local call helper for the macOS AgentMonitor widget
+
+Usage:
+  scripts/agent-monitor <agent-id> <green|yellow|red> [message] [name]
+  scripts/agent-monitor list
+  scripts/agent-monitor clear
+
+Examples:
+  scripts/agent-monitor hermes-main yellow "running tests" "Hermes main"
+  scripts/agent-monitor codex-1 red "waiting for approval"
+  scripts/agent-monitor hermes-main green "finished"
+
+Environment:
+  AGENT_MONITOR_PORT defaults to 8765
+  AGENT_MONITOR_HOST defaults to 127.0.0.1
+USAGE
+}
+
+json_escape() {
+  python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
+}
+
+if [[ $# -lt 1 ]]; then usage; exit 64; fi
+
+case "$1" in
+  list)
+    curl -fsS "http://${HOST}:${PORT}/agents"
+    ;;
+  clear)
+    curl -fsS -X DELETE "http://${HOST}:${PORT}/agents"
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    if [[ $# -lt 2 ]]; then usage; exit 64; fi
+    AGENT_ID="$1"
+    STATE="$2"
+    MESSAGE="${3:-}"
+    NAME="${4:-$AGENT_ID}"
+    case "$STATE" in green|yellow|red) ;; *) echo "state must be green, yellow, or red" >&2; exit 64 ;; esac
+    msg_json=$(printf '%s' "$MESSAGE" | json_escape)
+    name_json=$(printf '%s' "$NAME" | json_escape)
+    curl -fsS \
+      -X POST \
+      -H 'Content-Type: application/json' \
+      -d "{\"state\":\"${STATE}\",\"message\":${msg_json},\"name\":${name_json}}" \
+      "http://${HOST}:${PORT}/agents/${AGENT_ID}"
+    ;;
+esac

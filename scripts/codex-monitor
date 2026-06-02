@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -lt 2 ]]; then
+  cat >&2 <<'USAGE'
+Usage:
+  scripts/codex-monitor <agent-id> <prompt> [codex flags...]
+
+Examples:
+  scripts/codex-monitor codex-1 "Fix auth bug and run tests" --full-auto
+  scripts/codex-monitor codex-review "Review current diff"
+USAGE
+  exit 64
+fi
+
+AGENT_ID="$1"
+PROMPT="$2"
+shift 2
+
+MONITOR="${AGENT_MONITOR_BIN:-/Users/ruizhe.deng/Developer/agent_monitor/scripts/agent-monitor}"
+NAME="${AGENT_MONITOR_NAME:-Codex}"
+
+"$MONITOR" "$AGENT_ID" yellow "codex processing: $PROMPT" "$NAME" >/dev/null 2>&1 || true
+
+set +e
+codex exec "$PROMPT" "$@"
+status=$?
+set -e
+
+if [[ $status -eq 0 ]]; then
+  "$MONITOR" "$AGENT_ID" green "codex finished" "$NAME" >/dev/null 2>&1 || true
+else
+  "$MONITOR" "$AGENT_ID" red "codex exited with status $status" "$NAME" >/dev/null 2>&1 || true
+fi
+
+exit $status

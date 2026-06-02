@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "SessionStart": [{
+      "hooks": [{
+        "type": "command",
+        "command": "/Users/ruizhe.deng/Developer/agent_monitor/scripts/agent-monitor claude-code yellow \"session started\" \"Claude Code\" >/dev/null 2>&1 || true"
+      }]
+    }],
+    "PreToolUse": [{
+      "matcher": "Bash|Read|Edit|Write",
+      "hooks": [{
+        "type": "command",
+        "command": "/Users/ruizhe.deng/Developer/agent_monitor/scripts/agent-monitor claude-code yellow \"using tool\" \"Claude Code\" >/dev/null 2>&1 || true"
+      }]
+    }],
+    "Notification": [{
+      "hooks": [{
+        "type": "command",
+        "command": "/Users/ruizhe.deng/Developer/agent_monitor/scripts/agent-monitor claude-code red \"waiting for human input or approval\" \"Claude Code\" >/dev/null 2>&1 || true"
+      }]
+    }],
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "/Users/ruizhe.deng/Developer/agent_monitor/scripts/agent-monitor claude-code green \"finished response\" \"Claude Code\" >/dev/null 2>&1 || true"
+      }]
+    }],
+    "SubagentStop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "/Users/ruizhe.deng/Developer/agent_monitor/scripts/agent-monitor claude-subagent green \"subagent finished\" \"Claude subagent\" >/dev/null 2>&1 || true"
+      }]
+    }]
+  }
+}
