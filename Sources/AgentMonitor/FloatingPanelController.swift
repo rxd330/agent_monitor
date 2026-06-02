@@ -113,6 +113,14 @@ struct AgentRow: View {
                 HStack {
                     Text(agent.name).font(.subheadline.bold())
                     Spacer()
+                    Button {
+                        TerminalLauncher.openTerminal(for: agent)
+                    } label: {
+                        Image(systemName: "terminal")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open this agent's terminal")
+
                     Text(agent.updatedAt, style: .relative)
                         .font(.caption2)
                         .foregroundStyle(.secondary)

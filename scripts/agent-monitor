@@ -9,7 +9,7 @@ usage() {
 agent-monitor: static local call helper for the macOS AgentMonitor widget
 
 Usage:
-  scripts/agent-monitor <agent-id> <green|yellow|red> [message] [name]
+  scripts/agent-monitor <agent-id> <green|yellow|red> [message] [name] [terminal-tag]
   scripts/agent-monitor list
   scripts/agent-monitor clear
 
@@ -21,11 +21,9 @@ Examples:
 Environment:
   AGENT_MONITOR_PORT defaults to 8765
   AGENT_MONITOR_HOST defaults to 127.0.0.1
+  AGENT_MONITOR_TERMINAL_TAG optionally supplies metadata.terminal_tag
+  AGENT_MONITOR_CWD optionally supplies metadata.cwd; defaults to current directory
 USAGE
-}
-
-json_escape() {
-  python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
 }
 
 if [[ $# -lt 1 ]]; then usage; exit 64; fi
@@ -47,12 +45,27 @@ case "$1" in
     MESSAGE="${3:-}"
     NAME="${4:-$AGENT_ID}"
     case "$STATE" in green|yellow|red) ;; *) echo "state must be green, yellow, or red" >&2; exit 64 ;; esac
-    msg_json=$(printf '%s' "$MESSAGE" | json_escape)
-    name_json=$(printf '%s' "$NAME" | json_escape)
+    TERMINAL_TAG="${5:-${AGENT_MONITOR_TERMINAL_TAG:-}}"
+    CWD="${AGENT_MONITOR_CWD:-$PWD}"
+    payload=$(python3 - "$STATE" "$MESSAGE" "$NAME" "$TERMINAL_TAG" "$CWD" <<'PY'
+import json
+import sys
+state, message, name, terminal_tag, cwd = sys.argv[1:6]
+payload = {"state": state, "message": message, "name": name}
+metadata = {}
+if terminal_tag:
+    metadata["terminal_tag"] = terminal_tag
+if cwd:
+    metadata["cwd"] = cwd
+if metadata:
+    payload["metadata"] = metadata
+print(json.dumps(payload, separators=(",", ":")))
+PY
+)
     curl -fsS \
       -X POST \
       -H 'Content-Type: application/json' \
-      -d "{\"state\":\"${STATE}\",\"message\":${msg_json},\"name\":${name_json}}" \
+      -d "$payload" \
       "http://${HOST}:${PORT}/agents/${AGENT_ID}"
     ;;
 esac

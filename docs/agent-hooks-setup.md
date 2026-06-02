@@ -15,14 +15,19 @@ Status contract:
 The helper script is:
 
 ```bash
-scripts/agent-monitor <agent-id> <green|yellow|red> [message] [display-name]
+scripts/agent-monitor <agent-id> <green|yellow|red> [message] [display-name] [terminal-tag]
 ```
 
 From anywhere, call it with an absolute path:
 
 ```bash
-/Users/ruizhe.deng/Developer/agent_monitor/scripts/agent-monitor hermes-main yellow "processing" "Hermes main"
+/Users/ruizhe.deng/Developer/agent_monitor/scripts/agent-monitor hermes-main yellow "processing" "Hermes main" "tty-hermes-main"
 ```
+
+The optional fifth argument is stored as `metadata.terminal_tag`. The helper also
+stores `metadata.cwd` from the caller's current working directory, unless
+`AGENT_MONITOR_CWD` is set. The widget's terminal button uses these fields to
+focus a matching Terminal tab or open a new one in the right directory.
 
 If you run AgentMonitor on a non-default port:
 
@@ -87,6 +92,8 @@ Notes:
 
 - Hook commands intentionally end with `|| true` so monitor downtime never breaks Claude Code.
 - Redirects keep Claude's hook output quiet.
+- The helper records the hook process working directory as `metadata.cwd` automatically.
+- To make the widget focus an exact existing terminal tab, set a stable tag before launching Claude Code, for example: `export AGENT_MONITOR_TERMINAL_TAG=$(tty | sed 's#^/dev/##')`. The helper will store it as `metadata.terminal_tag`.
 - `Notification` is the best Claude Code signal for "red" because it fires on permission requests or input waits.
 - `Stop` is the best signal for "green" because it fires after Claude finishes a response.
 - `PreToolUse` is a reasonable signal for "yellow" because the agent is actively working.
@@ -154,6 +161,21 @@ Configured events:
 - `transform_llm_output` -> green, finished response
 - `on_session_end`, `on_session_finalize`, `on_session_reset` -> green
 
+The Hermes hook reports lifecycle status plus terminal-opening metadata:
+
+- `metadata.session_id`
+- `metadata.cwd`
+- `metadata.tty`
+- `metadata.terminal_tag`
+- `metadata.pid` / `metadata.ppid`
+- `metadata.runtime`, `metadata.profile`, `metadata.host`, `metadata.updated_by`
+
+`metadata.tty` is detected from the hook process or its parent process tree.
+`metadata.terminal_tag` uses the detected tty when available, then falls back to
+session id, then agent id. The widget uses that tag to focus an existing
+Terminal.app tab; if no matching tab is found, it opens a new Terminal window in
+`metadata.cwd`.
+
 Validation commands:
 
 ```bash
@@ -178,9 +200,9 @@ Any local agent can report status with one shell line:
 
 ```bash
 export AGENT_MONITOR=/Users/ruizhe.deng/Developer/agent_monitor/scripts/agent-monitor
-$AGENT_MONITOR "$AGENT_ID" yellow "processing: $TASK" "$AGENT_NAME"
-$AGENT_MONITOR "$AGENT_ID" red "waiting for approval" "$AGENT_NAME"
-$AGENT_MONITOR "$AGENT_ID" green "finished" "$AGENT_NAME"
+$AGENT_MONITOR "$AGENT_ID" yellow "processing: $TASK" "$AGENT_NAME" "${AGENT_MONITOR_TERMINAL_TAG:-$(tty 2>/dev/null | sed 's#^/dev/##')}"
+$AGENT_MONITOR "$AGENT_ID" red "waiting for approval" "$AGENT_NAME" "${AGENT_MONITOR_TERMINAL_TAG:-$(tty 2>/dev/null | sed 's#^/dev/##')}"
+$AGENT_MONITOR "$AGENT_ID" green "finished" "$AGENT_NAME" "${AGENT_MONITOR_TERMINAL_TAG:-$(tty 2>/dev/null | sed 's#^/dev/##')}"
 ```
 
 Keep the monitor decoupled: agents only need to know the local API/helper path.
