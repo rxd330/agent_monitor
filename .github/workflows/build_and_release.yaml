@@ -3,6 +3,7 @@ name: Build Swift App on Release
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -29,23 +30,43 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      - name: Inspect Build Products
+        run: |
+          echo "Build products:"
+          find build/Build/Products -maxdepth 5 -print
+
+          echo ""
+          echo "App bundles:"
+          find build/Build/Products -name "*.app" -print
+
+          echo ""
+          echo "Executable files:"
+          find build/Build/Products -type f -perm +111 -print || true
+
       - name: Compress Release Artifact
         run: |
-          APP_PATH="build/Build/Products/Release/AgentMonitor.app"
-          ZIP_NAME="AgentMonitor-${{ github.event.release.tag_name }}-macOS.zip"
+          TAG_NAME="${{ github.event.release.tag_name || github.ref_name }}"
+          ZIP_NAME="AgentMonitor-${TAG_NAME}-macOS.zip"
 
-          if [ ! -d "$APP_PATH" ]; then
-            echo "App not found at $APP_PATH"
+          APP_PATH="$(find build/Build/Products -name 'AgentMonitor.app' -type d | head -n 1)"
+
+          if [ -z "$APP_PATH" ]; then
+            echo "AgentMonitor.app was not found."
+            echo ""
             echo "Available .app files:"
-            find build/Build/Products -name "*.app"
+            find build/Build/Products -name "*.app" -print || true
+            echo ""
+            echo "All build products:"
+            find build/Build/Products -maxdepth 5 -print
             exit 1
           fi
 
+          echo "Found app at: $APP_PATH"
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_NAME"
 
       - name: Upload Binary to Release Assets
         uses: softprops/action-gh-release@v2
         with:
-          files: AgentMonitor-${{ github.event.release.tag_name }}-macOS.zip
+          files: AgentMonitor-*-macOS.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
