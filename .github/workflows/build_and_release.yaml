@@ -15,13 +15,15 @@ jobs:
 
     steps:
       - name: Checkout Source Code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Select Xcode Version
         run: sudo xcode-select -s /Applications/Xcode.app
 
       - name: Build Application
         run: |
+          set -euo pipefail
+
           xcodebuild \
             -scheme AgentMonitor \
             -configuration Release \
@@ -32,8 +34,15 @@ jobs:
 
       - name: Create macOS App Bundle
         run: |
+          set -euo pipefail
+
           EXECUTABLE_PATH="build/Build/Products/Release/AgentMonitor"
           APP_BUNDLE="AgentMonitor.app"
+          TAG_NAME="${{ github.event.release.tag_name || github.ref_name }}"
+          VERSION="${TAG_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+            VERSION="0.0.0"
+          fi
 
           if [ ! -f "$EXECUTABLE_PATH" ]; then
             echo "Executable not found at $EXECUTABLE_PATH"
@@ -48,8 +57,9 @@ jobs:
 
           cp "$EXECUTABLE_PATH" "$APP_BUNDLE/Contents/MacOS/AgentMonitor"
           chmod +x "$APP_BUNDLE/Contents/MacOS/AgentMonitor"
+          cp "Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 
-          cat > "$APP_BUNDLE/Contents/Info.plist" <<'EOF'
+          cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
             "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -65,16 +75,19 @@ jobs:
             <string>com.rxd330.AgentMonitor</string>
 
             <key>CFBundleVersion</key>
-            <string>1</string>
+            <string>${{ github.run_number }}</string>
 
             <key>CFBundleShortVersionString</key>
-            <string>1.0</string>
+            <string>$VERSION</string>
 
             <key>CFBundleExecutable</key>
             <string>AgentMonitor</string>
 
             <key>CFBundlePackageType</key>
             <string>APPL</string>
+
+            <key>CFBundleIconFile</key>
+            <string>AppIcon</string>
 
             <key>LSMinimumSystemVersion</key>
             <string>14.0</string>
@@ -88,16 +101,126 @@ jobs:
           </plist>
           EOF
 
+          plutil -lint "$APP_BUNDLE/Contents/Info.plist"
+          test -x "$APP_BUNDLE/Contents/MacOS/AgentMonitor"
+          test -f "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+
+      - name: Import Developer ID certificate
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$BUILD_CERTIFICATE_BASE64" ]; then
+            echo "No Developer ID certificate configured; skipping certificate import."
+            exit 0
+          fi
+
+          if [ -z "$P12_PASSWORD" ] || [ -z "$KEYCHAIN_PASSWORD" ]; then
+            echo "BUILD_CERTIFICATE_BASE64 is set, but P12_PASSWORD or KEYCHAIN_PASSWORD is missing."
+            exit 1
+          fi
+
+          CERTIFICATE_PATH="$RUNNER_TEMP/build_certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/[\" ]//g')
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+      - name: Sign macOS App Bundle
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+
+          APP_BUNDLE="AgentMonitor.app"
+
+          if [ -n "$BUILD_CERTIFICATE_BASE64" ]; then
+            SIGNING_IDENTITY="$(security find-identity -v -p codesigning | awk -F'\"' '/Developer ID Application/ {print $2; exit}')"
+            if [ -z "$SIGNING_IDENTITY" ]; then
+              echo "Developer ID Application signing identity was not found in the imported certificate."
+              exit 1
+            fi
+
+            codesign \
+              --force \
+              --options runtime \
+              --timestamp \
+              --sign "$SIGNING_IDENTITY" \
+              "$APP_BUNDLE"
+          else
+            if [ "$EVENT_NAME" = "release" ]; then
+              echo "Release builds must be signed with a Developer ID certificate to avoid Gatekeeper 'damaged app' failures."
+              echo "Configure BUILD_CERTIFICATE_BASE64, P12_PASSWORD, and KEYCHAIN_PASSWORD repository secrets."
+              exit 1
+            fi
+
+            echo "No Developer ID certificate configured; ad-hoc signing workflow_dispatch build for local testing only."
+            codesign --force --deep --sign - "$APP_BUNDLE"
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+
+      - name: Notarize macOS App Bundle
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$BUILD_CERTIFICATE_BASE64" ] || [ -z "$APPLE_ID" ] || [ -z "$APPLE_APP_PASSWORD" ] || [ -z "$APPLE_TEAM_ID" ]; then
+            if [ "$EVENT_NAME" = "release" ]; then
+              echo "Release builds must be signed and notarized to avoid Gatekeeper 'damaged app' failures after download."
+              echo "Configure BUILD_CERTIFICATE_BASE64, P12_PASSWORD, KEYCHAIN_PASSWORD, APPLE_ID, APPLE_APP_PASSWORD, and APPLE_TEAM_ID repository secrets."
+              exit 1
+            fi
+
+            echo "Notarization secrets are incomplete; skipping notarization for workflow_dispatch test build."
+            exit 0
+          fi
+
+          ditto -c -k --keepParent "AgentMonitor.app" "AgentMonitor-notary.zip"
+          xcrun notarytool submit "AgentMonitor-notary.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "AgentMonitor.app"
+          xcrun stapler validate "AgentMonitor.app"
+          spctl -a -vvv -t exec "AgentMonitor.app"
+
       - name: Compress Release Artifact
         run: |
+          set -euo pipefail
+
           TAG_NAME="${{ github.event.release.tag_name || github.ref_name }}"
           ZIP_NAME="AgentMonitor-${TAG_NAME}-macOS.zip"
 
           ditto -c -k --sequesterRsrc --keepParent "AgentMonitor.app" "$ZIP_NAME"
+          unzip -t "$ZIP_NAME"
 
       - name: Upload Binary to Release Assets
-        uses: softprops/action-gh-release@v3
+        if: ${{ github.event_name == 'release' }}
+        uses: softprops/action-gh-release@v2
         with:
           files: AgentMonitor-*-macOS.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload workflow_dispatch artifact
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentMonitor-macOS
+          path: AgentMonitor-*-macOS.zip

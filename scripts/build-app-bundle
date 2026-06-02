@@ -10,11 +10,13 @@ BIN="$ROOT_DIR/.build/$CONFIGURATION/AgentMonitor"
 APP_DIR="$ROOT_DIR/dist/AgentMonitor.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
+RESOURCES="$CONTENTS/Resources"
 
 rm -rf "$APP_DIR"
-mkdir -p "$MACOS"
+mkdir -p "$MACOS" "$RESOURCES"
 cp "$BIN" "$MACOS/AgentMonitor"
 chmod +x "$MACOS/AgentMonitor"
+cp "$ROOT_DIR/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
 
 cat > "$CONTENTS/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -31,6 +33,8 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <string>AgentMonitor</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleShortVersionString</key>
   <string>0.1.0</string>
   <key>CFBundleVersion</key>
