@@ -25,44 +25,75 @@ jobs:
           xcodebuild \
             -scheme AgentMonitor \
             -configuration Release \
-            -destination 'platform=macOS' \
+            -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             build
 
-      - name: Inspect Build Products
+      - name: Create macOS App Bundle
         run: |
-          echo "Build products:"
-          find build/Build/Products -maxdepth 5 -print
+          EXECUTABLE_PATH="build/Build/Products/Release/AgentMonitor"
+          APP_BUNDLE="AgentMonitor.app"
 
-          echo ""
-          echo "App bundles:"
-          find build/Build/Products -name "*.app" -print
+          if [ ! -f "$EXECUTABLE_PATH" ]; then
+            echo "Executable not found at $EXECUTABLE_PATH"
+            echo "Build products:"
+            find build/Build/Products -maxdepth 5 -print
+            exit 1
+          fi
 
-          echo ""
-          echo "Executable files:"
-          find build/Build/Products -type f -perm +111 -print || true
+          rm -rf "$APP_BUNDLE"
+          mkdir -p "$APP_BUNDLE/Contents/MacOS"
+          mkdir -p "$APP_BUNDLE/Contents/Resources"
+
+          cp "$EXECUTABLE_PATH" "$APP_BUNDLE/Contents/MacOS/AgentMonitor"
+          chmod +x "$APP_BUNDLE/Contents/MacOS/AgentMonitor"
+
+          cat > "$APP_BUNDLE/Contents/Info.plist" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key>
+            <string>AgentMonitor</string>
+
+            <key>CFBundleDisplayName</key>
+            <string>AgentMonitor</string>
+
+            <key>CFBundleIdentifier</key>
+            <string>com.rxd330.AgentMonitor</string>
+
+            <key>CFBundleVersion</key>
+            <string>1</string>
+
+            <key>CFBundleShortVersionString</key>
+            <string>1.0</string>
+
+            <key>CFBundleExecutable</key>
+            <string>AgentMonitor</string>
+
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+
+            <key>LSMinimumSystemVersion</key>
+            <string>14.0</string>
+
+            <key>NSHighResolutionCapable</key>
+            <true/>
+
+            <key>LSUIElement</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
 
       - name: Compress Release Artifact
         run: |
           TAG_NAME="${{ github.event.release.tag_name || github.ref_name }}"
           ZIP_NAME="AgentMonitor-${TAG_NAME}-macOS.zip"
 
-          APP_PATH="$(find build/Build/Products -name 'AgentMonitor.app' -type d | head -n 1)"
-
-          if [ -z "$APP_PATH" ]; then
-            echo "AgentMonitor.app was not found."
-            echo ""
-            echo "Available .app files:"
-            find build/Build/Products -name "*.app" -print || true
-            echo ""
-            echo "All build products:"
-            find build/Build/Products -maxdepth 5 -print
-            exit 1
-          fi
-
-          echo "Found app at: $APP_PATH"
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_NAME"
+          ditto -c -k --sequesterRsrc --keepParent "AgentMonitor.app" "$ZIP_NAME"
 
       - name: Upload Binary to Release Assets
         uses: softprops/action-gh-release@v2
