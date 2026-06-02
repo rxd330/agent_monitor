@@ -1,5 +1,11 @@
 # AgentMonitor hooks setup for Claude Code and Codex
 
+This legacy quick-start remains for runtime-specific snippets. For the comprehensive AI-agent guide, including the API contract, identity rules, Hermes hook template, Claude Code hooks, Codex wrappers, verification, and troubleshooting, see:
+
+```text
+docs/ai-agent-reporting-guide.md
+```
+
 This document wires local AI agents into the AgentMonitor macOS widget using the stable local API:
 
 ```text
@@ -163,8 +169,22 @@ Configured events:
 - `transform_llm_output` -> green, finished response
 - `on_session_end`, `on_session_finalize`, `on_session_reset` -> green
 
+The Hermes hook posts each Hermes session to a per-session row id:
+
+```text
+${HERMES_AGENT_MONITOR_ID:-hermes-default-cli}:${tty-or-session_id}
+```
+
+This is important when two Hermes sessions are open in the same project folder: a
+static id such as `hermes-default-cli` would make the two sessions overwrite each
+other in the monitor. TTY is preferred over session id when available because
+some Hermes hook events do not include `session_id`, while the terminal TTY stays
+stable across events from the same tab. The base id is still reported as
+`metadata.base_agent_id`.
+
 The Hermes hook reports lifecycle status plus terminal-opening metadata:
 
+- `metadata.base_agent_id`
 - `metadata.session_id`
 - `metadata.cwd`
 - `metadata.tty`

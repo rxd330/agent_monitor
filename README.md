@@ -85,12 +85,23 @@ The app tries to focus an existing session whose title/name/tty matches the
 terminal tag. If none is found, it opens a new session in the row's
 `metadata.cwd` directory and sets the terminal title to the tag.
 
-## Hermes hook / skill integration idea
+## AI agent hook integration
 
-For now, agents can make a static local call whenever behavior changes:
+For comprehensive setup instructions, including Hermes shell hooks, Claude Code
+hooks, Codex wrappers, stable per-session row IDs, terminal focusing metadata,
+verification, and troubleshooting, see:
 
-- before long work: `scripts/agent-monitor "$AGENT_ID" yellow "processing: <task>"`
-- before asking the human: `scripts/agent-monitor "$AGENT_ID" red "waiting for approval: <reason>"`
-- after completion: `scripts/agent-monitor "$AGENT_ID" green "finished: <summary>"`
+```text
+docs/ai-agent-reporting-guide.md
+```
+
+Quick pattern:
+
+- before long work: `scripts/agent-monitor "$AGENT_ID" yellow "processing: <task>" "$AGENT_NAME" "$TTY"`
+- before asking the human: `scripts/agent-monitor "$AGENT_ID" red "waiting for approval: <reason>" "$AGENT_NAME" "$TTY"`
+- after completion: `scripts/agent-monitor "$AGENT_ID" green "finished: <summary>" "$AGENT_NAME" "$TTY"`
+
+Use a session-specific `$AGENT_ID`, such as `hermes-default-cli:ttys000`, so two
+agent sessions opened in the same folder do not overwrite each other.
 
 Keep this monitor decoupled from any one agent runtime. The only contract is the local HTTP API.
