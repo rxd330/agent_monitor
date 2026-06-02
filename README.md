@@ -43,7 +43,7 @@ Update or create an agent:
 ```bash
 curl -X POST http://127.0.0.1:8765/agents/hermes-main \
   -H 'Content-Type: application/json' \
-  -d '{"state":"yellow","name":"Hermes main","message":"running tests","metadata":{"terminal_tag":"tty-agent-1","cwd":"/Users/you/project"}}'
+  -d '{"state":"yellow","name":"Hermes main","message":"running tests","metadata":{"terminal_tag":"tty-agent-1","terminal_app":"iTerm2","cwd":"/Users/you/project"}}'
 ```
 
 List agents:
@@ -76,11 +76,13 @@ scripts/agent-monitor clear
 
 The optional fifth helper argument, or `AGENT_MONITOR_TERMINAL_TAG`, is stored as
 `metadata.terminal_tag`. The helper also stores `metadata.cwd` from the current
-working directory by default, or from `AGENT_MONITOR_CWD` when set.
+working directory by default, or from `AGENT_MONITOR_CWD` when set. Set
+`AGENT_MONITOR_TERMINAL_APP` to `Terminal`, `iTerm2`, or `auto` to control which
+terminal app the row button searches/opens.
 
-In the widget, click the terminal button on an agent row to open Terminal. The
-app first tries to focus an existing Terminal tab whose title/name/tty matches
-the terminal tag. If none is found, it opens a new Terminal window in the row's
+In the widget, click the terminal button on an agent row to open Terminal/iTerm2.
+The app tries to focus an existing session whose title/name/tty matches the
+terminal tag. If none is found, it opens a new session in the row's
 `metadata.cwd` directory and sets the terminal title to the tag.
 
 ## Hermes hook / skill integration idea

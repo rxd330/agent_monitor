@@ -22,6 +22,7 @@ Environment:
   AGENT_MONITOR_PORT defaults to 8765
   AGENT_MONITOR_HOST defaults to 127.0.0.1
   AGENT_MONITOR_TERMINAL_TAG optionally supplies metadata.terminal_tag
+  AGENT_MONITOR_TERMINAL_APP optionally supplies metadata.terminal_app (Terminal, iTerm2, auto)
   AGENT_MONITOR_CWD optionally supplies metadata.cwd; defaults to current directory
 USAGE
 }
@@ -47,16 +48,19 @@ case "$1" in
     case "$STATE" in green|yellow|red) ;; *) echo "state must be green, yellow, or red" >&2; exit 64 ;; esac
     TERMINAL_TAG="${5:-${AGENT_MONITOR_TERMINAL_TAG:-}}"
     CWD="${AGENT_MONITOR_CWD:-$PWD}"
-    payload=$(python3 - "$STATE" "$MESSAGE" "$NAME" "$TERMINAL_TAG" "$CWD" <<'PY'
+    TERMINAL_APP="${AGENT_MONITOR_TERMINAL_APP:-auto}"
+    payload=$(python3 - "$STATE" "$MESSAGE" "$NAME" "$TERMINAL_TAG" "$CWD" "$TERMINAL_APP" <<'PY'
 import json
 import sys
-state, message, name, terminal_tag, cwd = sys.argv[1:6]
+state, message, name, terminal_tag, cwd, terminal_app = sys.argv[1:7]
 payload = {"state": state, "message": message, "name": name}
 metadata = {}
 if terminal_tag:
     metadata["terminal_tag"] = terminal_tag
 if cwd:
     metadata["cwd"] = cwd
+if terminal_app:
+    metadata["terminal_app"] = terminal_app
 if metadata:
     payload["metadata"] = metadata
 print(json.dumps(payload, separators=(",", ":")))

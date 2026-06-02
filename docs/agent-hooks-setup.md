@@ -26,8 +26,10 @@ From anywhere, call it with an absolute path:
 
 The optional fifth argument is stored as `metadata.terminal_tag`. The helper also
 stores `metadata.cwd` from the caller's current working directory, unless
-`AGENT_MONITOR_CWD` is set. The widget's terminal button uses these fields to
-focus a matching Terminal tab or open a new one in the right directory.
+`AGENT_MONITOR_CWD` is set. Set `AGENT_MONITOR_TERMINAL_APP` to `Terminal`,
+`iTerm2`, or `auto` to control which terminal app the row button searches/opens.
+The widget's terminal button uses these fields to focus a matching Terminal.app
+or iTerm2 session, or open a new one in the right directory.
 
 If you run AgentMonitor on a non-default port:
 
@@ -169,6 +171,7 @@ The Hermes hook reports lifecycle status plus terminal-opening metadata:
 - `metadata.terminal_tag`
 - `metadata.pid` / `metadata.ppid`
 - `metadata.runtime`, `metadata.profile`, `metadata.host`, `metadata.updated_by`
+- `metadata.terminal_app` when agents want to prefer `Terminal`, `iTerm2`, or `auto`
 
 `metadata.tty` is detected from the hook process or its parent process tree.
 `metadata.terminal_tag` uses the detected tty when available, then falls back to
