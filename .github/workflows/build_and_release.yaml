@@ -1,0 +1,49 @@
+name: Build Swift App on Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    name: Build Swift Application
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Select Xcode Version
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build Application
+        run: |
+          xcodebuild \
+            -scheme AgentMonitor \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Compress Release Artifact
+        run: |
+          APP_PATH="build/Build/Products/Release/AgentMonitor.app"
+          ZIP_NAME="AgentMonitor-${{ github.event.release.tag_name }}.zip"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "App not found at $APP_PATH"
+            find build/Build/Products -name "*.app"
+            exit 1
+          fi
+
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_NAME"
+
+      - name: Upload Binary to Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: AgentMonitor-${{ github.event.release.tag_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
