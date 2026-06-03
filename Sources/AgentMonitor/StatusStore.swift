@@ -12,10 +12,14 @@ final class StatusStore: ObservableObject {
     }
 
     var summary: String {
-        let red = agents.filter { $0.state == .red }.count
-        let yellow = agents.filter { $0.state == .yellow }.count
-        let green = agents.filter { $0.state == .green }.count
+        let red = count(for: .red)
+        let yellow = count(for: .yellow)
+        let green = count(for: .green)
         return "\(green) finished · \(yellow) processing · \(red) need human"
+    }
+
+    func count(for state: AgentState) -> Int {
+        agents.filter { $0.state == state }.count
     }
 
     func upsert(_ record: AgentRecord) {
@@ -55,6 +59,15 @@ final class StatusStore: ObservableObject {
 
     func removeAll() {
         agents.removeAll()
+    }
+
+    @discardableResult
+    func removeStale(olderThanMinutes minutes: Double, now: Date = Date()) -> Int {
+        let threshold = max(0, minutes)
+        let cutoff = now.addingTimeInterval(-threshold * 60)
+        let before = agents.count
+        agents.removeAll { $0.updatedAt < cutoff }
+        return before - agents.count
     }
 
     private func sortAgents() {

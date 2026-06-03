@@ -6,6 +6,9 @@ struct AgentMonitorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
+        // Keep a placeholder Settings scene so SwiftUI's app lifecycle
+        // initialises normally. User-facing configuration lives directly
+        // in the menu-bar dropdown because this is a .accessory app.
         Settings {
             EmptyView()
         }
@@ -20,6 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var server: LocalStatusServer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UserDefaults.standard.register(defaults: [
+            "staleAgentMinutes": 30.0,
+            "floatingWidgetCompact": false,
+        ])
         NSApp.setActivationPolicy(.accessory)
 
         let port = AppConfig.port

@@ -10,8 +10,8 @@ Status meanings:
 
 The app has two surfaces:
 
-1. A menu-bar status item that is always available.
-2. A floating desktop widget that can be dragged around and hidden by right-clicking it or using the eye-slash button. Bring it back from the menu bar.
+1. A menu-bar status item that is always available and keeps recent agent details accessible even when the floating widget is closed.
+2. A floating desktop widget that can be dragged around, minimized to compact traffic-light counts, or closed from the widget controls/context menu. Bring it back from the menu bar.
 
 The local API listens on `127.0.0.1:${AGENT_MONITOR_PORT:-8765}`.
 
@@ -101,6 +101,12 @@ In the widget, click the terminal button on an agent row to open Terminal/iTerm2
 The app tries to focus an existing session whose title/name/tty matches the
 terminal tag. If none is found, it opens a new session in the row's
 `metadata.cwd` directory and sets the terminal title to the tag.
+
+The floating widget has controls to minimize to traffic-light counts, close the
+floating panel without clearing agent data, and clear stale agents. Configure the
+compact-mode preference and stale-agent threshold from the menu-bar Settings
+submenu; the menu bar continues to show recent agent details while the floating
+widget is closed.
 
 ## AI agent hook integration
 

@@ -9,6 +9,7 @@ final class StatusBarController {
     private weak var panelController: FloatingPanelController?
     private var cancellables: Set<AnyCancellable> = []
     private let port: UInt16
+    private let staleThresholdOptions: [Double] = [5, 15, 30, 60, 120, 240]
 
     init(store: StatusStore, panelController: FloatingPanelController, port: UInt16) {
         self.store = store
@@ -23,6 +24,15 @@ final class StatusBarController {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateButton(); self?.configureMenu() }
             .store(in: &cancellables)
+    }
+
+    private var staleAgentMinutes: Double {
+        let configured = UserDefaults.standard.double(forKey: "staleAgentMinutes")
+        return configured > 0 ? configured : 30
+    }
+
+    private var startsCompact: Bool {
+        UserDefaults.standard.bool(forKey: "floatingWidgetCompact")
     }
 
     private func updateButton() {
@@ -48,22 +58,30 @@ final class StatusBarController {
         show.target = self
         menu.addItem(show)
 
-        let hide = NSMenuItem(title: "Hide Floating Widget", action: #selector(hideWidget), keyEquivalent: "h")
-        hide.target = self
-        menu.addItem(hide)
+        let close = NSMenuItem(title: "Close Floating Widget", action: #selector(hideWidget), keyEquivalent: "w")
+        close.target = self
+        menu.addItem(close)
+
+        let clearStale = NSMenuItem(title: "Clear Stale Agents (\(Int(staleAgentMinutes)) min)", action: #selector(clearStaleAgents), keyEquivalent: "")
+        clearStale.target = self
+        clearStale.isEnabled = !store.agents.isEmpty
+        menu.addItem(clearStale)
+
+        let settings = makeSettingsMenuItem()
+        menu.addItem(settings)
 
         let copyEndpoint = NSMenuItem(title: "Copy Local Endpoint", action: #selector(copyEndpoint), keyEquivalent: "c")
         copyEndpoint.target = self
         menu.addItem(copyEndpoint)
 
         menu.addItem(.separator())
-        for agent in store.agents.prefix(8) {
+        for agent in store.agents.prefix(12) {
             let item = NSMenuItem(title: "\(symbol(for: agent.state)) \(agent.name): \(agent.message.isEmpty ? agent.state.title : agent.message)", action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
         }
-        if store.agents.count > 8 {
-            let more = NSMenuItem(title: "+ \(store.agents.count - 8) more…", action: nil, keyEquivalent: "")
+        if store.agents.count > 12 {
+            let more = NSMenuItem(title: "+ \(store.agents.count - 12) more…", action: nil, keyEquivalent: "")
             more.isEnabled = false
             menu.addItem(more)
         }
@@ -80,6 +98,50 @@ final class StatusBarController {
     @objc private func hideWidget() { panelController?.hide() }
     @objc private func quit() { NSApp.terminate(nil) }
 
+    @objc private func clearStaleAgents() {
+        _ = store.removeStale(olderThanMinutes: staleAgentMinutes)
+        configureMenu()
+        updateButton()
+    }
+
+    @objc private func toggleCompactMode(_ sender: NSMenuItem) {
+        UserDefaults.standard.set(!startsCompact, forKey: "floatingWidgetCompact")
+        configureMenu()
+    }
+
+    @objc private func setStaleThreshold(_ sender: NSMenuItem) {
+        guard sender.tag > 0 else { return }
+        UserDefaults.standard.set(Double(sender.tag), forKey: "staleAgentMinutes")
+        configureMenu()
+    }
+
+    private func makeSettingsMenuItem() -> NSMenuItem {
+        let settings = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+
+        let compact = NSMenuItem(title: "Start Floating Widget Compact", action: #selector(toggleCompactMode(_:)), keyEquivalent: "")
+        compact.target = self
+        compact.state = startsCompact ? .on : .off
+        submenu.addItem(compact)
+
+        submenu.addItem(.separator())
+
+        let thresholdHeader = NSMenuItem(title: "Stale Agent Threshold", action: nil, keyEquivalent: "")
+        thresholdHeader.isEnabled = false
+        submenu.addItem(thresholdHeader)
+
+        for minutes in staleThresholdOptions {
+            let item = NSMenuItem(title: "\(Int(minutes)) minutes", action: #selector(setStaleThreshold(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = Int(minutes)
+            item.state = Int(staleAgentMinutes) == Int(minutes) ? .on : .off
+            submenu.addItem(item)
+        }
+
+        settings.submenu = submenu
+        return settings
+    }
+
     @objc private func copyEndpoint() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString("http://127.0.0.1:\(port)", forType: .string)
@@ -87,9 +149,9 @@ final class StatusBarController {
 
     private func symbol(for state: AgentState) -> String {
         switch state {
-        case .green: "●"
-        case .yellow: "●"
-        case .red: "●"
+        case .green: "🟢"
+        case .yellow: "🟡"
+        case .red: "🔴"
         }
     }
 

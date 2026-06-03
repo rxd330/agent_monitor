@@ -46,7 +46,32 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
 
 struct MonitorWidgetView: View {
     @ObservedObject var store: StatusStore
+    @AppStorage("staleAgentMinutes") private var staleAgentMinutes = 30.0
+    @AppStorage("floatingWidgetCompact") private var isCompact = false
     var onHide: () -> Void
+
+    var body: some View {
+        Group {
+            if isCompact {
+                CompactTrafficLightView(store: store, onExpand: { isCompact = false }, onClose: onHide)
+            } else {
+                ExpandedMonitorView(
+                    store: store,
+                    staleAgentMinutes: staleAgentMinutes,
+                    onMinimize: { isCompact = true },
+                    onClose: onHide
+                )
+            }
+        }
+        .background(WindowDragView())
+    }
+}
+
+struct ExpandedMonitorView: View {
+    @ObservedObject var store: StatusStore
+    let staleAgentMinutes: Double
+    var onMinimize: () -> Void
+    var onClose: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -60,11 +85,32 @@ struct MonitorWidgetView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(action: onHide) {
-                    Image(systemName: "eye.slash")
+                Button(action: { _ = store.removeStale(olderThanMinutes: staleAgentMinutes) }) {
+                    Image(systemName: "trash.clock")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Hide. Bring back from menu bar.")
+                .help("Clear agents not reporting in the past \(Int(staleAgentMinutes)) minutes")
+
+                Button(action: onMinimize) {
+                    Image(systemName: "minus")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Minimize to traffic-light counts")
+
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 18, weight: .semibold))
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Close floating widget. Agents remain available from the menu bar.")
             }
 
             Divider().opacity(0.35)
@@ -96,9 +142,77 @@ struct MonitorWidgetView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.18), lineWidth: 1))
         .contextMenu {
-            Button("Hide Widget", action: onHide)
+            Button("Minimize to Counts", action: onMinimize)
+            Button("Close Floating Widget", action: onClose)
+            Divider()
+            Button("Clear Stale Agents (\(Int(staleAgentMinutes)) min)") {
+                _ = store.removeStale(olderThanMinutes: staleAgentMinutes)
+            }
         }
-        .background(WindowDragView())
+    }
+}
+
+struct CompactTrafficLightView: View {
+    @ObservedObject var store: StatusStore
+    var onExpand: () -> Void
+    var onClose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TrafficLightCount(state: .red, count: store.count(for: .red))
+            TrafficLightCount(state: .yellow, count: store.count(for: .yellow))
+            TrafficLightCount(state: .green, count: store.count(for: .green))
+
+            Divider()
+                .frame(height: 22)
+                .opacity(0.35)
+
+            Button(action: onExpand) {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Expand floating widget")
+
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Close floating widget. Agents remain available from the menu bar.")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 1))
+        .contextMenu {
+            Button("Expand Widget", action: onExpand)
+            Button("Close Floating Widget", action: onClose)
+        }
+    }
+}
+
+struct TrafficLightCount: View {
+    let state: AgentState
+    let count: Int
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(state.color)
+                .frame(width: 26, height: 26)
+                .shadow(color: state.color.opacity(0.6), radius: 4)
+            Text("\(count)")
+                .font(.caption2.bold())
+                .monospacedDigit()
+                .foregroundStyle(.black.opacity(0.78))
+                .minimumScaleFactor(0.6)
+        }
+        .accessibilityLabel("\(count) \(state.title.lowercased()) agents")
     }
 }
 
