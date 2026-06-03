@@ -64,21 +64,38 @@ Clear all agents:
 curl -X DELETE http://127.0.0.1:8765/agents
 ```
 
-## Static local helper
+## Static local helper, installer, and diagnostics
 
 ```bash
 scripts/agent-monitor hermes-main yellow "running tests" "Hermes main" "tty-agent-1"
+scripts/agent-monitor status auto yellow "running tests" "Hermes main"
 scripts/agent-monitor hermes-main red "waiting for approval"
 scripts/agent-monitor hermes-main green "finished"
 scripts/agent-monitor list
 scripts/agent-monitor clear
 ```
 
-The optional fifth helper argument, or `AGENT_MONITOR_TERMINAL_TAG`, is stored as
-`metadata.terminal_tag`. The helper also stores `metadata.cwd` from the current
-working directory by default, or from `AGENT_MONITOR_CWD` when set. Set
-`AGENT_MONITOR_TERMINAL_APP` to `Terminal`, `iTerm2`, or `auto` to control which
-terminal app the row button searches/opens.
+The helper auto-detects the controlling TTY, terminal app, and current working
+directory when possible. The optional fifth helper argument, or
+`AGENT_MONITOR_TERMINAL_TAG`, is stored as `metadata.terminal_tag`. The helper
+also stores `metadata.cwd` from the current working directory by default, or from
+`AGENT_MONITOR_CWD` when set. Set `AGENT_MONITOR_TERMINAL_APP` to `Terminal`,
+`iTerm2`, or `auto` to control which terminal app the row button searches/opens.
+
+Run diagnostics:
+
+```bash
+scripts/agent-monitor doctor
+```
+
+Install runtime integrations:
+
+```bash
+scripts/agent-monitor install claude   # patches ~/.claude/settings.json hooks
+scripts/agent-monitor install codex    # installs ~/.local/bin/codex-monitor
+scripts/agent-monitor install hermes   # installs the Hermes hook script
+scripts/agent-monitor install all
+```
 
 In the widget, click the terminal button on an agent row to open Terminal/iTerm2.
 The app tries to focus an existing session whose title/name/tty matches the

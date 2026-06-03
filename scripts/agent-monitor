@@ -3,20 +3,30 @@ set -euo pipefail
 
 PORT="${AGENT_MONITOR_PORT:-8765}"
 HOST="${AGENT_MONITOR_HOST:-127.0.0.1}"
+BASE_URL="http://${HOST}:${PORT}"
+SELF_PATH="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$0")"
 
 usage() {
   cat <<'USAGE'
-agent-monitor: static local call helper for the macOS AgentMonitor widget
+agent-monitor: local helper, installer, and diagnostics for the macOS AgentMonitor widget
 
 Usage:
   scripts/agent-monitor <agent-id> <green|yellow|red> [message] [name] [terminal-tag]
+  scripts/agent-monitor status <agent-id|auto> <green|yellow|red> [message] [name] [terminal-tag]
+  scripts/agent-monitor claude-hook [event-name]
+  scripts/agent-monitor doctor
+  scripts/agent-monitor install claude|codex|hermes|all
+  scripts/agent-monitor install-claude
+  scripts/agent-monitor install-codex
+  scripts/agent-monitor install-hermes
   scripts/agent-monitor list
   scripts/agent-monitor clear
 
 Examples:
-  scripts/agent-monitor hermes-main yellow "running tests" "Hermes main"
-  scripts/agent-monitor codex-1 red "waiting for approval"
-  scripts/agent-monitor hermes-main green "finished"
+  scripts/agent-monitor auto yellow "running tests" "Hermes"
+  scripts/agent-monitor status codex:ttys000 red "waiting for approval" "Codex"
+  scripts/agent-monitor install claude
+  scripts/agent-monitor doctor
 
 Environment:
   AGENT_MONITOR_PORT defaults to 8765
@@ -24,52 +34,551 @@ Environment:
   AGENT_MONITOR_TERMINAL_TAG optionally supplies metadata.terminal_tag
   AGENT_MONITOR_TERMINAL_APP optionally supplies metadata.terminal_app (Terminal, iTerm2, auto)
   AGENT_MONITOR_CWD optionally supplies metadata.cwd; defaults to current directory
+  AGENT_MONITOR_BIN overrides the helper path used by installers
 USAGE
+}
+
+urlencode() {
+  python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
+}
+
+valid_state() {
+  case "$1" in green|yellow|red) return 0 ;; *) return 1 ;; esac
+}
+
+detect_terminal_tag() {
+  if [[ -n "${AGENT_MONITOR_TERMINAL_TAG:-}" ]]; then
+    printf '%s' "${AGENT_MONITOR_TERMINAL_TAG#/dev/}"
+    return 0
+  fi
+
+  local value
+  value="$(tty 2>/dev/null || true)"
+  case "$value" in
+    /dev/tty*|/dev/ttys*) printf '%s' "${value#/dev/}"; return 0 ;;
+    tty*|ttys*) printf '%s' "$value"; return 0 ;;
+  esac
+
+  local pid tty_value ppid
+  pid="$$"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -z "$pid" || "$pid" == "1" ]] && break
+    tty_value="$(/bin/ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    case "$tty_value" in
+      tty*|ttys*) printf '%s' "${tty_value#/dev/}"; return 0 ;;
+    esac
+    ppid="$(/bin/ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    [[ -z "$ppid" || "$ppid" == "$pid" ]] && break
+    pid="$ppid"
+  done
+}
+
+detect_terminal_app() {
+  if [[ -n "${AGENT_MONITOR_TERMINAL_APP:-}" ]]; then
+    printf '%s' "$AGENT_MONITOR_TERMINAL_APP"
+    return 0
+  fi
+
+  local pid comm ppid
+  pid="$$"
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    [[ -z "$pid" || "$pid" == "1" ]] && break
+    comm="$(/bin/ps -o comm= -p "$pid" 2>/dev/null || true)"
+    case "$comm" in
+      *iTerm.app*|*iTerm2*|*iTermServer*) printf 'iTerm2'; return 0 ;;
+      *Terminal.app*) printf 'Terminal'; return 0 ;;
+    esac
+    ppid="$(/bin/ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    [[ -z "$ppid" || "$ppid" == "$pid" ]] && break
+    pid="$ppid"
+  done
+  printf 'auto'
+}
+
+post_status() {
+  if [[ $# -lt 2 ]]; then usage; exit 64; fi
+  local agent_id="$1"
+  local state="$2"
+  local message="${3:-}"
+  local name="${4:-$agent_id}"
+  local terminal_tag="${5:-}"
+  local cwd="${AGENT_MONITOR_CWD:-$PWD}"
+  local terminal_app
+
+  if ! valid_state "$state"; then
+    echo "state must be green, yellow, or red" >&2
+    exit 64
+  fi
+
+  if [[ -z "$terminal_tag" ]]; then
+    terminal_tag="$(detect_terminal_tag || true)"
+  fi
+  terminal_app="$(detect_terminal_app || true)"
+
+  if [[ "$agent_id" == "auto" ]]; then
+    local base="${AGENT_MONITOR_AGENT_ID:-agent}"
+    if [[ -n "$terminal_tag" ]]; then
+      agent_id="${base}:${terminal_tag}"
+    else
+      agent_id="${base}:$$"
+    fi
+  fi
+
+  local payload encoded_id
+  payload=$(python3 - "$state" "$message" "$name" "$terminal_tag" "$cwd" "$terminal_app" <<'PY'
+import json
+import os
+import socket
+import sys
+state, message, name, terminal_tag, cwd, terminal_app = sys.argv[1:7]
+metadata = {
+    "cwd": cwd,
+    "terminal_app": terminal_app or "auto",
+    "host": socket.gethostname(),
+    "pid": str(os.getpid()),
+    "ppid": str(os.getppid()),
+    "updated_by": "agent-monitor-cli",
+}
+if terminal_tag:
+    metadata["terminal_tag"] = terminal_tag.removeprefix("/dev/")
+    metadata["tty"] = terminal_tag.removeprefix("/dev/")
+payload = {"state": state, "message": message, "name": name, "metadata": metadata}
+print(json.dumps(payload, separators=(",", ":")))
+PY
+)
+  encoded_id="$(urlencode "$agent_id")"
+  curl -fsS \
+    -X POST \
+    -H 'Content-Type: application/json' \
+    -d "$payload" \
+    "${BASE_URL}/agents/${encoded_id}"
+}
+
+claude_hook() {
+  local event_arg="${1:-}"
+  local raw_payload
+  raw_payload="$(cat || true)"
+  AGENT_MONITOR_HOOK_PAYLOAD="$raw_payload" python3 - "$BASE_URL" "$SELF_PATH" "$event_arg" <<'PY'
+import json
+import os
+import socket
+import subprocess
+import sys
+import urllib.parse
+import urllib.request
+
+base_url, self_path, event_arg = sys.argv[1:4]
+try:
+    raw = os.environ.get("AGENT_MONITOR_HOOK_PAYLOAD", "")
+    payload = json.loads(raw) if raw.strip() else {}
+except Exception:
+    payload = {}
+
+event = payload.get("hook_event_name") or event_arg or "unknown"
+project_dir = payload.get("cwd") or payload.get("project_dir") or os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("PWD") or os.getcwd()
+
+def short(value, limit=100):
+    text = str(value or "").replace("\n", " ").strip()
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+def detect_tty():
+    env = os.environ.get("AGENT_MONITOR_TERMINAL_TAG")
+    if env:
+        return env.removeprefix("/dev/")
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream.isatty():
+                return os.ttyname(stream.fileno()).removeprefix("/dev/")
+        except Exception:
+            pass
+    pid = os.getpid()
+    seen = set()
+    for _ in range(12):
+        if pid <= 1 or pid in seen:
+            break
+        seen.add(pid)
+        try:
+            tty = subprocess.check_output(["/bin/ps", "-o", "tty=", "-p", str(pid)], text=True, stderr=subprocess.DEVNULL, timeout=0.3).strip()
+            if tty and tty != "??":
+                return tty.removeprefix("/dev/")
+        except Exception:
+            pass
+        try:
+            pid = int(subprocess.check_output(["/bin/ps", "-o", "ppid=", "-p", str(pid)], text=True, stderr=subprocess.DEVNULL, timeout=0.3).strip())
+        except Exception:
+            break
+    return ""
+
+def detect_terminal_app():
+    env = os.environ.get("AGENT_MONITOR_TERMINAL_APP")
+    if env:
+        return env
+    pid = os.getpid()
+    seen = set()
+    for _ in range(14):
+        if pid <= 1 or pid in seen:
+            break
+        seen.add(pid)
+        try:
+            comm = subprocess.check_output(["/bin/ps", "-o", "comm=", "-p", str(pid)], text=True, stderr=subprocess.DEVNULL, timeout=0.3).strip()
+            if "iTerm" in comm or "iTerm2" in comm:
+                return "iTerm2"
+            if "Terminal.app" in comm:
+                return "Terminal"
+        except Exception:
+            pass
+        try:
+            pid = int(subprocess.check_output(["/bin/ps", "-o", "ppid=", "-p", str(pid)], text=True, stderr=subprocess.DEVNULL, timeout=0.3).strip())
+        except Exception:
+            break
+    return "auto"
+
+state = "yellow"
+message = f"claude event: {event}"
+if event in {"SessionStart"}:
+    state, message = "yellow", "claude session started"
+elif event in {"UserPromptSubmit"}:
+    prompt = payload.get("prompt") or payload.get("message") or ""
+    state, message = "yellow", f"claude thinking: {short(prompt)}" if prompt else "claude thinking"
+elif event in {"PreToolUse"}:
+    tool = payload.get("tool_name") or payload.get("tool") or "tool"
+    state, message = "yellow", f"claude using {tool}"
+elif event in {"PostToolUse"}:
+    tool = payload.get("tool_name") or payload.get("tool") or "tool"
+    state, message = "yellow", f"claude finished {tool}; continuing"
+elif event in {"Notification"}:
+    state, message = "red", f"claude needs attention: {short(payload.get('message') or payload.get('notification') or '')}".rstrip()
+elif event in {"Stop"}:
+    state, message = "green", "claude finished"
+elif event in {"SubagentStop"}:
+    state, message = "yellow", "claude subagent finished; continuing"
+elif event in {"PreCompact"}:
+    state, message = "yellow", "claude compacting context"
+
+tty = detect_tty()
+agent_id = os.environ.get("AGENT_MONITOR_AGENT_ID") or (f"claude-code:{tty}" if tty else f"claude-code:{os.getppid()}")
+name = os.environ.get("AGENT_MONITOR_NAME") or (f"Claude Code · {tty[-8:]}" if tty else "Claude Code")
+metadata = {
+    "runtime": "claude-code",
+    "cwd": project_dir,
+    "terminal_app": detect_terminal_app(),
+    "terminal_tag": tty,
+    "tty": tty,
+    "host": socket.gethostname(),
+    "pid": str(os.getpid()),
+    "ppid": str(os.getppid()),
+    "updated_by": "agent-monitor-claude-hook",
+    "hook_event_name": event,
+}
+body = {"state": state, "name": name, "message": message, "metadata": metadata}
+url = base_url.rstrip("/") + "/agents/" + urllib.parse.quote(agent_id, safe="")
+try:
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=float(os.environ.get("AGENT_MONITOR_TIMEOUT", "0.7"))) as response:
+        response.read(256)
+except Exception:
+    pass
+PY
+}
+
+install_claude() {
+  local bin="${AGENT_MONITOR_BIN:-$SELF_PATH}"
+  local settings="${CLAUDE_SETTINGS_PATH:-$HOME/.claude/settings.json}"
+  mkdir -p "$(dirname "$settings")"
+  python3 - "$settings" "$bin" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+settings_path = Path(sys.argv[1]).expanduser()
+bin_path = sys.argv[2]
+try:
+    data = json.loads(settings_path.read_text()) if settings_path.exists() and settings_path.read_text().strip() else {}
+except Exception as exc:
+    backup = settings_path.with_suffix(settings_path.suffix + ".agent-monitor-backup")
+    if settings_path.exists():
+        backup.write_text(settings_path.read_text())
+    data = {}
+
+hooks = data.setdefault("hooks", {})
+
+def hook_command(event):
+    return f"{json.dumps(bin_path)} claude-hook {event} >/dev/null 2>&1 || true"
+
+def ensure(event, matcher=None):
+    entries = hooks.setdefault(event, [])
+    command = hook_command(event)
+    for entry in entries:
+        for hook in entry.get("hooks", []):
+            if hook.get("type") == "command" and "agent-monitor" in hook.get("command", "") and f"claude-hook {event}" in hook.get("command", ""):
+                hook["command"] = command
+                return
+    new_entry = {"hooks": [{"type": "command", "command": command}]}
+    if matcher:
+        new_entry["matcher"] = matcher
+    entries.append(new_entry)
+
+for event in ["SessionStart", "UserPromptSubmit", "Notification", "Stop", "SubagentStop", "PreCompact"]:
+    ensure(event)
+ensure("PreToolUse", ".*")
+ensure("PostToolUse", ".*")
+settings_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+print(settings_path)
+PY
+  echo "Installed Claude Code AgentMonitor hooks in $settings"
+  echo "Restart existing Claude Code sessions for hooks to take effect."
+}
+
+install_codex() {
+  local target_dir="${AGENT_MONITOR_INSTALL_DIR:-$HOME/.local/bin}"
+  local target="$target_dir/codex-monitor"
+  local bin="${AGENT_MONITOR_BIN:-$SELF_PATH}"
+  mkdir -p "$target_dir"
+  cat > "$target" <<'WRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+MONITOR_BIN="__AGENT_MONITOR_BIN__"
+if [[ $# -lt 1 ]]; then
+  echo "Usage: codex-monitor [codex args...]" >&2
+  echo "Example: codex-monitor exec 'Fix the auth bug' --full-auto" >&2
+  exit 64
+fi
+TTY_TAG="${AGENT_MONITOR_TERMINAL_TAG:-$(tty 2>/dev/null | sed 's#^/dev/##' || true)}"
+if [[ -n "$TTY_TAG" ]]; then
+  AGENT_ID="${AGENT_MONITOR_AGENT_ID:-codex:${TTY_TAG}}"
+  NAME="${AGENT_MONITOR_NAME:-Codex · ${TTY_TAG}}"
+else
+  AGENT_ID="${AGENT_MONITOR_AGENT_ID:-codex:$$}"
+  NAME="${AGENT_MONITOR_NAME:-Codex}"
+fi
+MESSAGE="codex running: $*"
+"$MONITOR_BIN" status "$AGENT_ID" yellow "$MESSAGE" "$NAME" "$TTY_TAG" >/dev/null 2>&1 || true
+set +e
+codex "$@"
+STATUS=$?
+set -e
+if [[ $STATUS -eq 0 ]]; then
+  "$MONITOR_BIN" status "$AGENT_ID" green "codex finished" "$NAME" "$TTY_TAG" >/dev/null 2>&1 || true
+else
+  "$MONITOR_BIN" status "$AGENT_ID" red "codex exited with status $STATUS" "$NAME" "$TTY_TAG" >/dev/null 2>&1 || true
+fi
+exit "$STATUS"
+WRAPPER
+  python3 - "$target" "$bin" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+bin_path = sys.argv[2]
+text = path.read_text().replace("__AGENT_MONITOR_BIN__", bin_path.replace('"', '\\"'))
+path.write_text(text)
+PY
+  chmod +x "$target"
+  echo "Installed Codex wrapper: $target"
+  echo "Use: codex-monitor exec 'your task' --full-auto"
+  echo "Add $target_dir to PATH if it is not already there."
+}
+
+install_hermes() {
+  local source_template="$PWD/templates/hermes-agent-monitor-status.py"
+  local target="$HOME/.hermes/agent-hooks/agent-monitor-status.py"
+  if [[ ! -f "$source_template" ]]; then
+    source_template="$(dirname "$SELF_PATH")/../templates/hermes-agent-monitor-status.py"
+  fi
+  if [[ ! -f "$source_template" ]]; then
+    echo "Could not find templates/hermes-agent-monitor-status.py" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "$target")"
+  cp "$source_template" "$target"
+  chmod +x "$target"
+
+  if command -v hermes >/dev/null 2>&1; then
+    if hermes hooks list >/dev/null 2>&1; then
+      echo "Copied Hermes hook script to $target"
+      echo "Hermes CLI is available. Run these if hooks are not already configured:"
+      echo "  hermes hooks list"
+      echo "  hermes hooks doctor"
+      echo "  hermes hooks test pre_llm_call"
+    else
+      echo "Copied Hermes hook script to $target"
+      echo "Hermes was found, but 'hermes hooks list' failed. Check Hermes config manually."
+    fi
+  else
+    echo "Copied Hermes hook script to $target"
+    echo "Hermes CLI not found on PATH; configure ~/.hermes/config.yaml hooks manually."
+  fi
+  echo "Restart existing Hermes sessions for hook changes to take effect."
+}
+
+run_doctor() {
+  local failures=0
+  pass() { printf 'PASS %s\n' "$*"; }
+  warn() { printf 'WARN %s\n' "$*"; }
+  fail() { printf 'FAIL %s\n' "$*"; failures=$((failures + 1)); }
+
+  echo "AgentMonitor doctor"
+  echo "Endpoint: ${BASE_URL}"
+
+  if curl -fsS "${BASE_URL}/health" >/tmp/agent-monitor-health.$$ 2>/tmp/agent-monitor-health-err.$$; then
+    pass "monitor health reachable: $(tr '\n' ' ' </tmp/agent-monitor-health.$$ | sed 's/  */ /g')"
+  else
+    fail "monitor health not reachable on ${BASE_URL} ($(cat /tmp/agent-monitor-health-err.$$ 2>/dev/null || true))"
+  fi
+  rm -f /tmp/agent-monitor-health.$$ /tmp/agent-monitor-health-err.$$
+
+  local tty_tag terminal_app
+  tty_tag="$(detect_terminal_tag || true)"
+  terminal_app="$(detect_terminal_app || true)"
+  if [[ -n "$tty_tag" ]]; then pass "detected tty: $tty_tag"; else warn "could not detect controlling tty"; fi
+  pass "detected terminal app preference: ${terminal_app:-auto}"
+
+  if [[ -n "$tty_tag" ]]; then
+    if post_status "doctor:${tty_tag}" yellow "doctor test row" "AgentMonitor Doctor" "$tty_tag" >/dev/null 2>&1; then
+      pass "posted test row doctor:${tty_tag}"
+    else
+      fail "could not post test row"
+    fi
+  fi
+
+  local process_list
+  process_list="$(/bin/ps ax -o comm= 2>/dev/null || true)"
+  if grep -qi 'iTerm' <<<"$process_list"; then
+    pass "iTerm2 process is running"
+    local dump_script focus_script
+    dump_script="/tmp/agent-monitor-iterm-dump.$$.applescript"
+    focus_script="/tmp/agent-monitor-iterm-focus.$$.applescript"
+    cat > "$dump_script" <<'APPLESCRIPT'
+tell application "iTerm2"
+  set out to "windows=" & (count of windows) & linefeed
+  repeat with w in windows
+    repeat with tb in tabs of w
+      repeat with s in sessions of tb
+        set out to out & "session name=[" & (name of s as text) & "] tty=[" & (tty of s as text) & "]" & linefeed
+      end repeat
+    end repeat
+  end repeat
+  return out
+end tell
+APPLESCRIPT
+    if /usr/bin/osascript "$dump_script" >/tmp/agent-monitor-iterm-dump.$$ 2>/tmp/agent-monitor-iterm-dump-err.$$; then
+      pass "iTerm2 AppleScript session enumeration succeeded"
+      if [[ -n "$tty_tag" ]] && grep -q "$tty_tag" /tmp/agent-monitor-iterm-dump.$$; then
+        pass "iTerm2 session found for $tty_tag"
+      elif [[ -n "$tty_tag" ]]; then
+        warn "iTerm2 enumeration did not include $tty_tag"
+      fi
+    else
+      fail "iTerm2 AppleScript enumeration failed: $(cat /tmp/agent-monitor-iterm-dump-err.$$)"
+    fi
+    if [[ -n "$tty_tag" ]]; then
+      cat > "$focus_script" <<APPLESCRIPT
+set targetTags to {"$tty_tag", "/dev/$tty_tag"}
+tell application "iTerm2"
+  repeat with w in windows
+    repeat with tb in tabs of w
+      repeat with s in sessions of tb
+        repeat with targetTag in targetTags
+          set matched to false
+          try
+            if name of s contains targetTag then set matched to true
+          end try
+          try
+            if tty of s contains targetTag then set matched to true
+          end try
+          if matched then
+            select s
+            select tb
+            activate
+            return "focused"
+          end if
+        end repeat
+      end repeat
+    end repeat
+  end repeat
+end tell
+error "no matching iTerm2 session"
+APPLESCRIPT
+      if /usr/bin/osascript "$focus_script" >/tmp/agent-monitor-iterm-focus.$$ 2>/tmp/agent-monitor-iterm-focus-err.$$; then
+        pass "iTerm2 focus script succeeded for $tty_tag"
+      else
+        warn "iTerm2 focus script failed for $tty_tag: $(cat /tmp/agent-monitor-iterm-focus-err.$$)"
+      fi
+    fi
+    rm -f "$dump_script" "$focus_script" /tmp/agent-monitor-iterm-dump.$$ /tmp/agent-monitor-iterm-dump-err.$$ /tmp/agent-monitor-iterm-focus.$$ /tmp/agent-monitor-iterm-focus-err.$$
+  else
+    warn "iTerm2 is not running"
+  fi
+
+  if [[ -f "$HOME/.claude/settings.json" ]] && grep -q 'claude-hook' "$HOME/.claude/settings.json"; then
+    pass "Claude Code hooks appear installed in ~/.claude/settings.json"
+  else
+    warn "Claude Code hooks not found; run: $SELF_PATH install claude"
+  fi
+
+  if [[ -x "$HOME/.local/bin/codex-monitor" ]]; then
+    pass "Codex wrapper installed at ~/.local/bin/codex-monitor"
+  else
+    warn "Codex wrapper not found; run: $SELF_PATH install codex"
+  fi
+
+  if [[ -x "$HOME/.hermes/agent-hooks/agent-monitor-status.py" ]]; then
+    pass "Hermes hook script exists"
+  else
+    warn "Hermes hook script not found; run: $SELF_PATH install hermes"
+  fi
+
+  if [[ $failures -eq 0 ]]; then
+    echo "Doctor completed with no hard failures."
+  else
+    echo "Doctor completed with $failures hard failure(s)."
+  fi
+  return "$failures"
 }
 
 if [[ $# -lt 1 ]]; then usage; exit 64; fi
 
 case "$1" in
   list)
-    curl -fsS "http://${HOST}:${PORT}/agents"
+    curl -fsS "${BASE_URL}/agents"
     ;;
   clear)
-    curl -fsS -X DELETE "http://${HOST}:${PORT}/agents"
+    curl -fsS -X DELETE "${BASE_URL}/agents"
+    ;;
+  status)
+    shift
+    post_status "$@"
+    ;;
+  claude-hook)
+    shift
+    claude_hook "${1:-}"
+    ;;
+  doctor)
+    run_doctor
+    ;;
+  install)
+    shift
+    case "${1:-}" in
+      claude) install_claude ;;
+      codex) install_codex ;;
+      hermes) install_hermes ;;
+      all) install_claude; install_codex; install_hermes ;;
+      *) echo "install target must be claude, codex, hermes, or all" >&2; exit 64 ;;
+    esac
+    ;;
+  install-claude)
+    install_claude
+    ;;
+  install-codex)
+    install_codex
+    ;;
+  install-hermes)
+    install_hermes
     ;;
   -h|--help|help)
     usage
     ;;
   *)
-    if [[ $# -lt 2 ]]; then usage; exit 64; fi
-    AGENT_ID="$1"
-    STATE="$2"
-    MESSAGE="${3:-}"
-    NAME="${4:-$AGENT_ID}"
-    case "$STATE" in green|yellow|red) ;; *) echo "state must be green, yellow, or red" >&2; exit 64 ;; esac
-    TERMINAL_TAG="${5:-${AGENT_MONITOR_TERMINAL_TAG:-}}"
-    CWD="${AGENT_MONITOR_CWD:-$PWD}"
-    TERMINAL_APP="${AGENT_MONITOR_TERMINAL_APP:-auto}"
-    payload=$(python3 - "$STATE" "$MESSAGE" "$NAME" "$TERMINAL_TAG" "$CWD" "$TERMINAL_APP" <<'PY'
-import json
-import sys
-state, message, name, terminal_tag, cwd, terminal_app = sys.argv[1:7]
-payload = {"state": state, "message": message, "name": name}
-metadata = {}
-if terminal_tag:
-    metadata["terminal_tag"] = terminal_tag
-if cwd:
-    metadata["cwd"] = cwd
-if terminal_app:
-    metadata["terminal_app"] = terminal_app
-if metadata:
-    payload["metadata"] = metadata
-print(json.dumps(payload, separators=(",", ":")))
-PY
-)
-    curl -fsS \
-      -X POST \
-      -H 'Content-Type: application/json' \
-      -d "$payload" \
-      "http://${HOST}:${PORT}/agents/${AGENT_ID}"
+    post_status "$@"
     ;;
 esac
