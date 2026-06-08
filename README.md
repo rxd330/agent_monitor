@@ -13,7 +13,19 @@ The app has two surfaces:
 1. A menu-bar status item that is always available and keeps recent agent details accessible even when the floating widget is closed.
 2. A floating desktop widget that can be dragged around, minimized to compact traffic-light counts, or closed from the widget controls/context menu. Bring it back from the menu bar.
 
-The local API listens on `127.0.0.1:${AGENT_MONITOR_PORT:-8765}`.
+The menu-bar dropdown also has Settings -> Open Settings… for account usage tracking:
+
+- OpenAI API: manual monthly API budget/usage tracking shown in the dropdown.
+- Codex Tokens: manual token limit/used/remaining tracking shown in the dropdown.
+- DeepSeek API: live `https://api.deepseek.com/user/balance` refresh when an API key is configured, with manual budget fallback fields.
+
+Enabled account usage rows refresh automatically once per minute. Use “Refresh Account Usage” in the dropdown for an immediate refresh.
+
+API keys are persisted in an encrypted file at `~/Library/Application Support/AgentMonitor/account-secrets.json`. The AES-GCM encryption key is generated locally and stored in macOS Keychain as `AgentMonitor.AccountSecrets/encryption-key-v1`. Non-secret account settings remain in UserDefaults.
+
+The local API listens on `127.0.0.1:${AGENT_MONITOR_PORT:-8765}`. If that
+port is already in use at launch, AgentMonitor warns you and does not start a
+second local status server on the occupied port.
 
 ## Run
 

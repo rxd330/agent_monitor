@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Darwin
 
 final class LocalStatusServer: @unchecked Sendable {
     private let port: UInt16
@@ -21,6 +22,26 @@ final class LocalStatusServer: @unchecked Sendable {
     init(port: UInt16, store: StatusStore) {
         self.port = port
         self.store = store
+    }
+
+    static func isPortInUse(_ port: UInt16) -> Bool {
+        let socketDescriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard socketDescriptor >= 0 else { return false }
+        defer { close(socketDescriptor) }
+
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+
+        let result = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                Darwin.bind(socketDescriptor, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+
+        return result != 0 && errno == EADDRINUSE
     }
 
     func start() {
