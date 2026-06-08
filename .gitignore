@@ -5,9 +5,11 @@ Package.resolved
 
 # Build artifacts
 dist/
+build/
 DerivedData/
 
 # Xcode / macOS
+.vscode/
 *.xcuserdata/
 *.xcuserstate
 .DS_Store
